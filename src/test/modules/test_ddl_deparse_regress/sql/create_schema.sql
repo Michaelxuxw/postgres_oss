@@ -1,0 +1,6 @@
+-- Currently, ddl deparse only supports the TABLE command. Therefore, this
+-- test file is only prepared for testing the TABLE command.
+
+-- Command prepared for alter_table.sql.
+-- For "SET SCHEMA new_schema"
+CREATE SCHEMA new_test_schema;
