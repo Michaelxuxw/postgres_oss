@@ -1675,8 +1675,11 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_CreateTableAsStmt:
+				EventTriggerTableInitWriteStart(parsetree);
 				address = ExecCreateTableAs(pstate, (CreateTableAsStmt *) parsetree,
 											params, queryEnv, qc);
+				EventTriggerTableInitWriteEnd(address);
+				commandCollected = true;
 				break;
 
 			case T_RefreshMatViewStmt:
@@ -2206,6 +2209,25 @@ UtilityContainsQuery(Node *parsetree)
 	}
 }
 
+/*
+ * Return the given object type as a string.
+ *
+ * If isgrant is true, then this function is called while deparsing GRANT
+ * statement and some object names are replaced.
+ */
+const char *
+stringify_objtype(ObjectType objtype, bool isgrant)
+{
+	switch (objtype)
+	{
+		case OBJECT_TABLE:
+			return "TABLE";
+		default:
+			elog(ERROR, "unsupported object type %d", objtype);
+	}
+
+	return "???";				/* keep compiler quiet */
+}
 
 /*
  * AlterObjectTypeCommandTag
