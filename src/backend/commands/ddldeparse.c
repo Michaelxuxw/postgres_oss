@@ -135,10 +135,10 @@ static ObjElem *new_object_object(ObjTree *value);
 static ObjTree *new_objtree_VA(char *fmt, int numobjs, ...);
 static JsonbValue *objtree_to_jsonb_rec(ObjTree *tree, JsonbParseState *state);
 static char *RelationGetColumnDefault(Relation rel, AttrNumber attno,
-									  List *dpcontext, List **exprs);
+									  List *dpcontext, Node **expr);
 
 static ObjTree *deparse_ColumnDef(Relation relation, List *dpcontext, bool composite,
-								  ColumnDef *coldef, bool is_alter, List **exprs);
+								  ColumnDef *coldef, bool is_alter, Node **expr);
 static ObjTree *deparse_ColumnIdentity(Oid seqrelid, char identity, bool alter_table);
 static ObjTree *deparse_ColumnSetOptions(AlterTableCmd *subcmd);
 
@@ -158,6 +158,28 @@ static inline ObjElem *deparse_Seq_As(Form_pg_sequence seqdata);
 static List *deparse_InhRelations(Oid objectId);
 static List *deparse_TableElements(Relation relation, List *tableElements, List *dpcontext,
 								   bool typed, bool composite);
+
+static void mark_function_volatile(ddl_deparse_context *context, Node *expr);
+
+/*
+ * Mark the func_volatile flag for an expression in the command.
+ */
+static void
+mark_function_volatile(ddl_deparse_context *context, Node *expr)
+{
+	if (context->func_volatile == PROVOLATILE_VOLATILE)
+		return;
+
+	if (contain_volatile_functions(expr))
+	{
+		context->func_volatile = PROVOLATILE_VOLATILE;
+		return;
+	}
+
+	if (context->func_volatile == PROVOLATILE_IMMUTABLE &&
+		contain_mutable_functions(expr))
+		context->func_volatile = PROVOLATILE_STABLE;
+}
 
 /*
  * Append present as false to a tree.
@@ -859,7 +881,7 @@ obtainConstraints(List *elements, Oid relationId)
  */
 static char *
 RelationGetColumnDefault(Relation rel, AttrNumber attno, List *dpcontext,
-						 List **exprs)
+						 Node **expr)
 {
 	Node	   *defval;
 	char	   *defstr;
@@ -870,8 +892,8 @@ RelationGetColumnDefault(Relation rel, AttrNumber attno, List *dpcontext,
 	defstr = deparse_expression(defval, dpcontext, false, false);
 
 	/* Collect the expression for later replication safety checks */
-	if (exprs)
-		*exprs = lappend(*exprs, defval);
+	if (expr)
+		*expr = defval;
 
 	return defstr;
 }
@@ -916,7 +938,7 @@ RelationGetPartitionBound(Oid relid)
  */
 static ObjTree *
 deparse_ColumnDef(Relation relation, List *dpcontext, bool composite,
-				  ColumnDef *coldef, bool is_alter, List **exprs)
+				  ColumnDef *coldef, bool is_alter, Node **expr)
 {
 	ObjTree    *ret;
 	ObjTree    *tmp_obj;
@@ -1023,7 +1045,7 @@ deparse_ColumnDef(Relation relation, List *dpcontext, bool composite,
 			char	   *defstr;
 
 			defstr = RelationGetColumnDefault(relation, attrForm->attnum,
-											  dpcontext, exprs);
+											  dpcontext, expr);
 
 			append_string_object(tmp_obj, "%{default}s", "default", defstr);
 		}
@@ -1054,7 +1076,7 @@ deparse_ColumnDef(Relation relation, List *dpcontext, bool composite,
 			char	   *defstr;
 
 			defstr = RelationGetColumnDefault(relation, attrForm->attnum,
-											  dpcontext, exprs);
+											  dpcontext, expr);
 			append_string_object(tmp_obj, "(%{generation_expr}s) STORED",
 								 "generation_expr", defstr);
 		}
@@ -1986,7 +2008,7 @@ deparse_CreateTableAsStmt(CollectedCommand *cmd)
  * ALTER %{objtype}s %{only}s %{identity}D %{subcmds:, }s
  */
 static ObjTree *
-deparse_AlterRelation(CollectedCommand *cmd)
+deparse_AlterRelation(CollectedCommand *cmd, ddl_deparse_context *context)
 {
 	ObjTree    *ret;
 	ObjTree    *tmp_obj;
@@ -1997,7 +2019,7 @@ deparse_AlterRelation(CollectedCommand *cmd)
 	ListCell   *cell;
 	const char *reltype;
 	bool		istype = false;
-	List	   *exprs = NIL;
+	Node	   *expr = NULL;
 	Oid			relId = cmd->d.alterTable.objectId;
 	AlterTableStmt *stmt = NULL;
 
@@ -2070,7 +2092,10 @@ deparse_AlterRelation(CollectedCommand *cmd)
 				/* XXX need to set the "recurse" bit somewhere? */
 				Assert(IsA(subcmd->def, ColumnDef));
 				tree = deparse_ColumnDef(rel, dpcontext, false,
-										 (ColumnDef *) subcmd->def, true, &exprs);
+										 (ColumnDef *) subcmd->def, true, &expr);
+
+				mark_function_volatile(context, expr);
+
 				tmp_obj = new_objtree_VA("ADD %{objtype}s %{if_not_exists}s %{definition}s", 4,
 										"objtype", ObjTypeString,
 										istype ? "ATTRIBUTE" : "COLUMN",
@@ -2345,7 +2370,8 @@ deparse_AlterRelation(CollectedCommand *cmd)
 							if (!isnull)
 							{
 								conbin = TextDatumGetCString(val);
-								exprs = lappend(exprs, stringToNode(conbin));
+								expr = stringToNode(conbin);
+								mark_function_volatile(context, expr);
 							}
 
 							ReleaseSysCache(tup);
@@ -2454,9 +2480,12 @@ deparse_AlterRelation(CollectedCommand *cmd)
 						 */
 						tmp_obj2 = new_objtree("USING");
 						if (def->raw_default)
+						{
 							append_string_object(tmp_obj2, "%{expression}s",
 												 "expression",
 												 sub->usingexpr);
+							mark_function_volatile(context, def->cooked_default);
+						}
 						else
 							append_not_present(tmp_obj2);
 						append_object_object(tmp_obj, "%{using}s", tmp_obj2);
@@ -2809,25 +2838,6 @@ deparse_AlterRelation(CollectedCommand *cmd)
 					 subcmd->subtype);
 				break;
 		}
-
-		/*
-		 * We don't support replicating ALTER TABLE which contains volatile
-		 * functions because it's possible the functions contain DDL/DML in
-		 * which case these operations will be executed twice and cause
-		 * duplicate data. In addition, we don't know whether the tables being
-		 * accessed by these DDL/DML are published or not. So blindly allowing
-		 * such functions can allow unintended clauses like the tables
-		 * accessed in those functions may not even exist on the subscriber.
-		 */
-		if (contain_volatile_functions((Node *) exprs))
-			elog(ERROR, "ALTER TABLE command using volatile function cannot be replicated");
-
-		/*
-		 * Clean the list as we already confirmed there is no volatile
-		 * function.
-		 */
-		list_free(exprs);
-		exprs = NIL;
 	}
 
 	table_close(rel, AccessShareLock);
@@ -3190,7 +3200,7 @@ deparse_simple_command(CollectedCommand *cmd)
  * Workhorse to deparse a CollectedCommand.
  */
 char *
-deparse_utility_command(CollectedCommand *cmd, bool verbose_mode)
+deparse_utility_command(CollectedCommand *cmd, ddl_deparse_context *context)
 {
 	OverrideSearchPath *overridePath;
 	MemoryContext oldcxt;
@@ -3226,7 +3236,7 @@ deparse_utility_command(CollectedCommand *cmd, bool verbose_mode)
 	overridePath->addTemp = true;
 	PushOverrideSearchPath(overridePath);
 
-	verbose = verbose_mode;
+	verbose = context->verbose_mode;
 
 	switch (cmd->type)
 	{
@@ -3234,7 +3244,7 @@ deparse_utility_command(CollectedCommand *cmd, bool verbose_mode)
 			tree = deparse_simple_command(cmd);
 			break;
 		case SCT_AlterTable:
-			tree = deparse_AlterRelation(cmd);
+			tree = deparse_AlterRelation(cmd, context);
 			break;
 		case SCT_CreateTableAs:
 			tree = deparse_CreateTableAsStmt(cmd);
@@ -3274,8 +3284,12 @@ ddl_deparse_to_json(PG_FUNCTION_ARGS)
 {
 	CollectedCommand *cmd = (CollectedCommand *) PG_GETARG_POINTER(0);
 	char	   *command;
+	ddl_deparse_context context;
 
-	command = deparse_utility_command(cmd, true);
+	context.verbose_mode = true;
+	context.func_volatile = PROVOLATILE_IMMUTABLE;
+
+	command = deparse_utility_command(cmd, &context);
 
 	if (command)
 		PG_RETURN_TEXT_P(cstring_to_text(command));

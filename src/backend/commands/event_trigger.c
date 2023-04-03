@@ -38,6 +38,8 @@
 #include "parser/parse_func.h"
 #include "parser/parser.h"
 #include "pgstat.h"
+#include "replication/ddlmessage.h"
+#include "replication/message.h"
 #include "tcop/deparse_utility.h"
 #include "tcop/ddldeparse.h"
 #include "tcop/utility.h"
@@ -58,7 +60,7 @@ static void AlterEventTriggerOwner_internal(Relation rel,
 static void error_duplicate_filter_variable(const char *defname);
 static Datum filter_list_to_array(List *filterlist);
 static Oid	insert_event_trigger_tuple(const char *trigname, const char *eventname,
-									   Oid evtOwner, Oid funcoid, List *taglist);
+									   Oid evtOwner, Oid funcoid, List *taglist, bool isinternal);
 static void validate_ddl_tags(const char *filtervar, List *taglist);
 static void validate_table_rewrite_tags(const char *filtervar, List *taglist);
 static void EventTriggerInvoke(List *fn_oid_list, EventTriggerData *trigdata);
@@ -69,7 +71,7 @@ static const char *stringify_adefprivs_objtype(ObjectType objtype);
  * Create an event trigger.
  */
 Oid
-CreateEventTrigger(CreateEventTrigStmt *stmt)
+CreateEventTrigger(CreateEventTrigStmt *stmt, bool isinternal)
 {
 	HeapTuple	tuple;
 	Oid			funcoid;
@@ -151,7 +153,7 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 
 	/* Insert catalog entries. */
 	return insert_event_trigger_tuple(stmt->trigname, stmt->eventname,
-									  evtowner, funcoid, tags);
+									  evtowner, funcoid, tags, isinternal);
 }
 
 /*
@@ -220,7 +222,7 @@ error_duplicate_filter_variable(const char *defname)
  */
 static Oid
 insert_event_trigger_tuple(const char *trigname, const char *eventname, Oid evtOwner,
-						   Oid funcoid, List *taglist)
+						   Oid funcoid, List *taglist, bool isinternal)
 {
 	Relation	tgrel;
 	Oid			trigoid;
@@ -248,6 +250,7 @@ insert_event_trigger_tuple(const char *trigname, const char *eventname, Oid evtO
 	values[Anum_pg_event_trigger_evtfoid - 1] = ObjectIdGetDatum(funcoid);
 	values[Anum_pg_event_trigger_evtenabled - 1] =
 		CharGetDatum(TRIGGER_FIRES_ON_ORIGIN);
+	values[Anum_pg_event_trigger_evtisinternal - 1] = BoolGetDatum(isinternal);
 	if (taglist == NIL)
 		nulls[Anum_pg_event_trigger_evttags - 1] = true;
 	else

@@ -18,6 +18,7 @@
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_subscription.h"
 #include "commands/defrem.h"
+#include "commands/publicationcmds.h"
 #include "commands/subscriptioncmds.h"
 #include "executor/executor.h"
 #include "fmgr.h"
@@ -55,6 +56,11 @@ static void pgoutput_message(LogicalDecodingContext *ctx,
 							 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 							 bool transactional, const char *prefix,
 							 Size sz, const char *message);
+static void pgoutput_ddl(LogicalDecodingContext *ctx,
+						 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
+						 const char *prefix, Oid relid,
+						 DeparsedCommandType cmdtype,
+						 Size sz, const char *message);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 								   RepOriginId origin_id);
 static void pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx,
@@ -207,6 +213,7 @@ typedef struct RelationSyncEntry
 typedef struct PGOutputTxnData
 {
 	bool		sent_begin_txn; /* flag indicating whether BEGIN has been sent */
+	List	   *deleted_relids;
 } PGOutputTxnData;
 
 /* Map used to remember which relation schemas we sent. */
@@ -254,6 +261,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->change_cb = pgoutput_change;
 	cb->truncate_cb = pgoutput_truncate;
 	cb->message_cb = pgoutput_message;
+	cb->ddl_cb = pgoutput_ddl;
 	cb->commit_cb = pgoutput_commit_txn;
 
 	cb->begin_prepare_cb = pgoutput_begin_prepare_txn;
@@ -270,6 +278,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->stream_commit_cb = pgoutput_stream_commit;
 	cb->stream_change_cb = pgoutput_change;
 	cb->stream_message_cb = pgoutput_message;
+	cb->stream_ddl_cb = pgoutput_ddl;
 	cb->stream_truncate_cb = pgoutput_truncate;
 	/* transaction streaming - two-phase commit */
 	cb->stream_prepare_cb = pgoutput_stream_prepare_txn;
@@ -505,6 +514,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 
 		/* Init publication state. */
 		data->publications = NIL;
+		data->deleted_relids = NIL;
 		publications_valid = false;
 
 		/*
@@ -533,6 +543,34 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 	}
 }
 
+/* Initialize the per-transaction level variable for the given transaction. */
+static void
+init_txn_data(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
+	PGOutputTxnData *txndata;
+
+	if (txn->output_plugin_private != NULL)
+		return;
+
+	txndata = MemoryContextAllocZero(ctx->context, sizeof(PGOutputTxnData));
+
+	txn->output_plugin_private = txndata;
+}
+
+/* Clean up the per-transaction level variable for the given transaction. */
+static void
+clean_txn_data(ReorderBufferTXN *txn)
+{
+	PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+	if (txndata == NULL)
+		return;
+
+	list_free(txndata->deleted_relids);
+	pfree(txndata);
+	txn->output_plugin_private = NULL;
+}
+
 /*
  * BEGIN callback.
  *
@@ -546,10 +584,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 static void
 pgoutput_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
-	PGOutputTxnData *txndata = MemoryContextAllocZero(ctx->context,
-													  sizeof(PGOutputTxnData));
-
-	txn->output_plugin_private = txndata;
+	init_txn_data(ctx, txn);
 }
 
 /*
@@ -594,8 +629,7 @@ pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 */
 	sent_begin_txn = txndata->sent_begin_txn;
 	OutputPluginUpdateProgress(ctx, !sent_begin_txn);
-	pfree(txndata);
-	txn->output_plugin_private = NULL;
+	clean_txn_data(txn);
 
 	if (!sent_begin_txn)
 	{
@@ -637,6 +671,8 @@ pgoutput_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_prepare(ctx->out, txn, prepare_lsn);
 	OutputPluginWrite(ctx, true);
+
+	clean_txn_data(txn);
 }
 
 /*
@@ -1665,6 +1701,111 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	OutputPluginWrite(ctx, true);
 }
 
+/* Check if the given object is published. */
+static bool
+is_object_published(LogicalDecodingContext *ctx, Oid objid)
+{
+	Relation	relation = NULL;
+	RelationSyncEntry *relentry;
+	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+
+	/* First check the DDL command filter. */
+	switch (get_rel_relkind(objid))
+	{
+		case RELKIND_RELATION:
+		case RELKIND_PARTITIONED_TABLE:
+			relation = RelationIdGetRelation(objid);
+			relentry = get_rel_sync_entry(data, relation);
+			RelationClose(relation);
+
+			/*
+			 * Skip sending this ddl if we don't publish ddl message or the ddl
+			 * need to be published via its root relation.
+			 */
+			if (!relentry->pubactions.pubddl_table ||
+				relentry->publish_as_relid != objid)
+				return false;
+
+			break;
+		default:
+			/* unsupported objects */
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * Send the decoded DDL over wire.
+ */
+static void
+pgoutput_ddl(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+			 XLogRecPtr message_lsn,
+			 const char *prefix, Oid relid, DeparsedCommandType cmdtype,
+			 Size sz, const char *message)
+{
+	PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+	/*
+	 * Check if the given object is published. Note that for dropped objects,
+	 * we cannot get the required information from the catalog, so we skip the
+	 * check for them.
+	 */
+	if (cmdtype != DCT_TableDropEnd && !is_object_published(ctx, relid))
+		return;
+
+	switch (cmdtype)
+	{
+		case DCT_TableDropStart:
+			{
+				MemoryContext	old;
+
+				init_txn_data(ctx, txn);
+
+				txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+				/*
+				 * On DROP start, add the relid to a deleted_relid list if the
+				 * relid is part of a publication that supports ddl
+				 * publication. We need this because on DROP end, the relid
+				 * will no longer be valid. Later on Drop end, verify that the
+				 * drop is for a relid that is on the deleted_rid list, and
+				 * only then send the ddl message.
+				 */
+				old = MemoryContextSwitchTo(ctx->context);
+				txndata->deleted_relids = lappend_oid(txndata->deleted_relids,
+													  relid);
+				MemoryContextSwitchTo(old);
+			}
+			return;
+
+		case DCT_TableDropEnd:
+			if (!list_member_oid(txndata->deleted_relids, relid))
+				return;
+
+			txndata->deleted_relids = list_delete_oid(txndata->deleted_relids,
+													  relid);
+			break;
+
+		case DCT_TableAlter:
+		case DCT_SimpleCmd:
+			/* do nothing */
+			break;
+
+		default:
+			elog(ERROR, "unsupported type %d", cmdtype);
+			break;
+	}
+
+	/* Send BEGIN if we haven't yet */
+	if (txndata && !txndata->sent_begin_txn)
+		pgoutput_send_begin(ctx, txn);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_ddl(ctx->out, message_lsn, prefix, sz, message);
+	OutputPluginWrite(ctx, true);
+}
+
 /*
  * Return true if the data is associated with an origin and the user has
  * requested the changes that don't have an origin, false otherwise.
@@ -1813,6 +1954,7 @@ pgoutput_stream_abort(struct LogicalDecodingContext *ctx,
 	OutputPluginWrite(ctx, true);
 
 	cleanup_rel_sync_cache(toptxn->xid, false);
+	clean_txn_data(txn);
 }
 
 /*
@@ -1838,6 +1980,7 @@ pgoutput_stream_commit(struct LogicalDecodingContext *ctx,
 	OutputPluginWrite(ctx, true);
 
 	cleanup_rel_sync_cache(txn->xid, true);
+	clean_txn_data(txn);
 }
 
 /*
@@ -1856,6 +1999,8 @@ pgoutput_stream_prepare_txn(LogicalDecodingContext *ctx,
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_stream_prepare(ctx->out, txn, prepare_lsn);
 	OutputPluginWrite(ctx, true);
+
+	clean_txn_data(txn);
 }
 
 /*
@@ -1941,6 +2086,27 @@ set_schema_sent_in_streamed_txn(RelationSyncEntry *entry, TransactionId xid)
 	MemoryContextSwitchTo(oldctx);
 }
 
+/* Reload publications if needed. */
+static void
+reload_publications(PGOutputData *data)
+{
+	MemoryContext oldctx;
+
+	if (!publications_valid)
+	{
+		oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+		if (data->publications)
+		{
+			list_free_deep(data->publications);
+			data->publications = NIL;
+		}
+		data->publications = LoadPublications(data->publication_names);
+		MemoryContextSwitchTo(oldctx);
+		publications_valid = true;
+	}
+}
+
+
 /*
  * Find or create entry in the relation schema cache.
  *
@@ -1955,7 +2121,6 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 {
 	RelationSyncEntry *entry;
 	bool		found;
-	MemoryContext oldctx;
 	Oid			relid = RelationGetRelid(relation);
 
 	Assert(RelationSyncCache != NULL);
@@ -1973,7 +2138,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->schema_sent = false;
 		entry->streamed_txns = NIL;
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
-			entry->pubactions.pubdelete = entry->pubactions.pubtruncate = false;
+			entry->pubactions.pubdelete = entry->pubactions.pubtruncate =
+			entry->pubactions.pubddl_table = false;
 		entry->new_slot = NULL;
 		entry->old_slot = NULL;
 		memset(entry->exprstate, 0, sizeof(entry->exprstate));
@@ -2002,19 +2168,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		char		relkind = get_rel_relkind(relid);
 		List	   *rel_publications = NIL;
 
-		/* Reload publications if needed before use. */
-		if (!publications_valid)
-		{
-			oldctx = MemoryContextSwitchTo(CacheMemoryContext);
-			if (data->publications)
-			{
-				list_free_deep(data->publications);
-				data->publications = NIL;
-			}
-			data->publications = LoadPublications(data->publication_names);
-			MemoryContextSwitchTo(oldctx);
-			publications_valid = true;
-		}
+		reload_publications(data);
 
 		/*
 		 * Reset schema_sent status as the relation definition may have
@@ -2031,6 +2185,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->pubactions.pubupdate = false;
 		entry->pubactions.pubdelete = false;
 		entry->pubactions.pubtruncate = false;
+		entry->pubactions.pubddl_table = false;
 
 		/*
 		 * Tuple slots cleanups. (Will be rebuilt later if needed).
@@ -2144,6 +2299,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 				entry->pubactions.pubupdate |= pub->pubactions.pubupdate;
 				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
 				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
+				entry->pubactions.pubddl_table |= pub->pubactions.pubddl_table;
 
 				/*
 				 * We want to publish the changes as the top-most ancestor

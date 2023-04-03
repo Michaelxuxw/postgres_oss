@@ -80,7 +80,7 @@ typedef struct SQLDropObject
 #define CALLED_AS_EVENT_TRIGGER(fcinfo) \
 	((fcinfo)->context != NULL && IsA((fcinfo)->context, EventTriggerData))
 
-extern Oid	CreateEventTrigger(CreateEventTrigStmt *stmt);
+extern Oid	CreateEventTrigger(CreateEventTrigStmt *stmt, bool isinternal);
 extern Oid	get_event_trigger_oid(const char *trigname, bool missing_ok);
 
 extern Oid	AlterEventTrigger(AlterEventTrigStmt *stmt);

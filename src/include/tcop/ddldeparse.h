@@ -14,7 +14,15 @@
 
 #include "tcop/deparse_utility.h"
 
-extern char *deparse_utility_command(CollectedCommand *cmd, bool verbose_mode);
+/* Context info needed for deparsing ddl command */
+typedef struct
+{
+	bool		verbose_mode;
+	/* provolatile flag of the function contained in the command */
+	char		func_volatile;
+} ddl_deparse_context;
+
+extern char *deparse_utility_command(CollectedCommand *cmd, ddl_deparse_context *context);
 extern char *deparse_ddl_json_to_string(char *jsonb);
 extern char *deparse_drop_command(const char *objidentity, const char *objecttype,
 								  Node *parsetree);
