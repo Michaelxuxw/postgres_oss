@@ -1500,6 +1500,12 @@ test_sub=# SELECT * FROM t1 ORDER BY id;
         </itemizedlist>
       </para>
     </listitem>
+    <listitem>
+      <para>
+        index: this option enables replication of Index DDL commands,
+        which include CREATE/ALTER/DROP INDEX.
+      </para>
+    </listitem>
   </itemizedlist>
 
   <sect2 id="ddl-replication-option-examples">
@@ -1604,7 +1610,7 @@ ALTER PUBLICATION mypub SET (ddl = 'table');
        </row>
        <row>
         <entry align="left"><literal>ALTER INDEX</literal></entry>
-        <entry align="center"><literal>-</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
         <entry align="left"></entry>
        </row>
        <row>
@@ -1884,7 +1890,7 @@ ALTER PUBLICATION mypub SET (ddl = 'table');
        </row>
        <row>
         <entry align="left"><literal>CREATE INDEX</literal></entry>
-        <entry align="center"><literal>-</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
         <entry align="left"></entry>
        </row>
        <row>
@@ -2139,7 +2145,7 @@ ALTER PUBLICATION mypub SET (ddl = 'table');
        </row>
        <row>
         <entry align="left"><literal>DROP INDEX</literal></entry>
-        <entry align="center"><literal>-</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
         <entry align="left"></entry>
        </row>
        <row>

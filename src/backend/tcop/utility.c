@@ -2220,6 +2220,8 @@ stringify_objtype(ObjectType objtype, bool isgrant)
 {
 	switch (objtype)
 	{
+		case OBJECT_INDEX:
+			return "INDEX";
 		case OBJECT_TABLE:
 			return "TABLE";
 		default:
