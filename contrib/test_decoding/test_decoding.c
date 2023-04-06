@@ -785,9 +785,6 @@ pg_decode_ddl_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	case DCT_ObjectCreate:
 		appendStringInfo(ctx->out, "cmdtype: Create, ");
 		break;
-	case DCT_ObjectDrop:
-		appendStringInfo(ctx->out, "cmdtype: Drop, ");
-		break;
 	default:
 		appendStringInfo(ctx->out, "cmdtype: Invalid, ");
 		break;

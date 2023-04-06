@@ -75,9 +75,9 @@ static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 							   XLogRecPtr message_lsn, bool transactional,
 							   const char *prefix, Size message_size, const char *message);
 static void ddl_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-								  XLogRecPtr message_lsn, const char *prefix,
-								  Oid relid, DeparsedCommandType cmdtype,
-								  Size message_size, const char *message);
+						   XLogRecPtr message_lsn, const char *prefix,
+						   Oid relid, DeparsedCommandType cmdtype,
+						   Size message_size, const char *message);
 
 /* streaming callbacks */
 static void stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
@@ -96,10 +96,10 @@ static void stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *tx
 									  XLogRecPtr message_lsn, bool transactional,
 									  const char *prefix, Size message_size, const char *message);
 static void stream_ddl_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-										 XLogRecPtr message_lsn,
-										 const char *prefix,
-										 Oid relid, DeparsedCommandType cmdtype,
-										 Size message_size, const char *message);
+								  XLogRecPtr message_lsn,
+								  const char *prefix,
+								  Oid relid, DeparsedCommandType cmdtype,
+								  Size message_size, const char *message);
 static void stream_truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 									   int nrelations, Relation relations[], ReorderBufferChange *change);
 
@@ -1248,10 +1248,10 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 static void
 ddl_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-					  XLogRecPtr message_lsn,
-					  const char *prefix, Oid relid, DeparsedCommandType cmdtype,
-					  Size message_size,
-					  const char *message)
+			   XLogRecPtr message_lsn,
+			   const char *prefix, Oid relid, DeparsedCommandType cmdtype,
+			   Size message_size,
+			   const char *message)
 {
 	LogicalDecodingContext *ctx = cache->private_data;
 	LogicalErrorCallbackState state;
@@ -1278,7 +1278,7 @@ ddl_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* do the actual work: call callback */
 	ctx->callbacks.ddl_cb(ctx, txn, message_lsn, prefix, relid, cmdtype,
-								 message_size, message);
+						  message_size, message);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
@@ -1601,10 +1601,10 @@ stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 static void
 stream_ddl_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-							 XLogRecPtr message_lsn,
-							 const char *prefix, Oid relid, DeparsedCommandType cmdtype,
-							 Size message_size,
-							 const char *message)
+					  XLogRecPtr message_lsn,
+					  const char *prefix, Oid relid, DeparsedCommandType cmdtype,
+					  Size message_size,
+					  const char *message)
 {
 	LogicalDecodingContext *ctx = cache->private_data;
 	LogicalErrorCallbackState state;

@@ -102,6 +102,7 @@ parse_publication_options(ParseState *pstate,
 	pubactions->pubdelete = true;
 	pubactions->pubtruncate = true;
 	pubactions->pubddl_table = false;
+	pubactions->pubddl_index = false;
 	*publish_via_partition_root = false;
 
 	/* Parse options */
@@ -177,6 +178,7 @@ parse_publication_options(ParseState *pstate,
 			 * should be published.
 			 */
 			pubactions->pubddl_table = false;
+			pubactions->pubddl_index = false;
 
 			*ddl_type_given = true;
 			ddl_level = defGetString(defel);
@@ -193,6 +195,8 @@ parse_publication_options(ParseState *pstate,
 
 				if (strcmp(publish_opt, "table") == 0)
 					pubactions->pubddl_table = true;
+				else if (strcmp(publish_opt, "index") == 0)
+					pubactions->pubddl_index = true;
 				else
 					ereport(ERROR,
 							errcode(ERRCODE_SYNTAX_ERROR),
@@ -842,6 +846,15 @@ CreateDDLReplicaEventTriggers(PublicationActions pubactions, Oid puboid)
 		end_commands = lappend_int(end_commands, CMDTAG_DROP_TABLE);
 	}
 
+	if (pubactions.pubddl_index)
+	{
+		start_commands = lappend_int(start_commands, CMDTAG_DROP_INDEX);
+
+		end_commands = lappend_int(end_commands, CMDTAG_CREATE_INDEX);
+		end_commands = lappend_int(end_commands, CMDTAG_ALTER_INDEX);
+		end_commands = lappend_int(end_commands, CMDTAG_DROP_INDEX);
+	}
+
 	/* Create the ddl_command_end event trigger */
 	if (end_commands != NIL)
 		CreateDDLReplicaEventTrigger(PUB_TRIG_EVENT1, end_commands, puboid);
@@ -977,6 +990,8 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 		BoolGetDatum(pubactions.pubtruncate);
 	values[Anum_pg_publication_pubddl_table - 1] =
 	BoolGetDatum(pubactions.pubddl_table);
+	values[Anum_pg_publication_pubddl_index - 1] =
+	BoolGetDatum(pubactions.pubddl_index);
 	values[Anum_pg_publication_pubviaroot - 1] =
 		BoolGetDatum(publish_via_partition_root);
 
@@ -1014,7 +1029,7 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 		{
 			List	   *rels;
 
-			if (pubactions.pubddl_table)
+			if (pubactions.pubddl_table || pubactions.pubddl_index)
 				ereport(ERROR,
 						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("cannot add table to publication \"%s\" if DDL replication is enabled",
@@ -1170,7 +1185,7 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 		}
 	}
 
-	if (ddl_type_given && pubactions.pubddl_table)
+	if (ddl_type_given && (pubactions.pubddl_table || pubactions.pubddl_index))
 	{
 		if (root_relids == NIL)
 			root_relids = GetPublicationRelations(pubform->oid,
@@ -1205,7 +1220,8 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 	if (ddl_type_given)
 	{
 		/* Recreate the event triggers if the ddl option is changed. */
-		if (pubform->pubddl_table != pubactions.pubddl_table)
+		if (pubform->pubddl_table != pubactions.pubddl_table ||
+			pubform->pubddl_index != pubactions.pubddl_index)
 		{
 			DropDDLReplicaEventTriggers(pubform->oid);
 			CreateDDLReplicaEventTriggers(pubactions, pubform->oid);
@@ -1213,6 +1229,9 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 
 		values[Anum_pg_publication_pubddl_table - 1] = BoolGetDatum(pubactions.pubddl_table);
 		replaces[Anum_pg_publication_pubddl_table - 1] = true;
+
+		values[Anum_pg_publication_pubddl_index - 1] = BoolGetDatum(pubactions.pubddl_index);
+		replaces[Anum_pg_publication_pubddl_index - 1] = true;
 	}
 
 	if (publish_via_partition_root_given)
@@ -1320,7 +1339,7 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 
 	if (stmt->action == AP_AddObjects)
 	{
-		if (pubform->pubddl_table)
+		if (pubform->pubddl_table || pubform->pubddl_index)
 			ereport(ERROR,
 					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					errmsg("cannot add table to publication \"%s\" if DDL replication is enabled",
@@ -1344,7 +1363,7 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 		List	   *delrels = NIL;
 		ListCell   *oldlc;
 
-		if (pubform->pubddl_table)
+		if (pubform->pubddl_table || pubform->pubddl_index)
 			ereport(ERROR,
 					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					errmsg("cannot add table to publication \"%s\" if DDL replication is enabled",

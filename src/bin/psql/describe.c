@@ -6183,7 +6183,7 @@ listPublications(const char *pattern)
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
-	static const bool translate_columns[] = {false, false, false, false, false, false, false, false, false, false};
+	static const bool translate_columns[] = {false, false, false, false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6205,9 +6205,13 @@ listPublications(const char *pattern)
 					  gettext_noop("Owner"),
 					  gettext_noop("All tables"));
 	if (pset.sversion >= 160000)
+	{
 		appendPQExpBuffer(&buf,
-						  ",\n  pubddl_table AS \"%s\"",
-						  gettext_noop("Table DDLs"));
+						  ",\n  pubddl_table AS \"%s\",\n"
+						  "  pubddl_index AS \"%s\"\n",
+						  gettext_noop("Table DDLs"),
+						  gettext_noop("Index DDLs"));
+	}
 	appendPQExpBuffer(&buf,
 					  ",\n  pubinsert AS \"%s\",\n"
 					  "  pubupdate AS \"%s\",\n"
@@ -6339,7 +6343,8 @@ describePublications(const char *pattern)
 					  "  puballtables");
 	if (has_pubddl)
 		appendPQExpBufferStr(&buf,
-							 ", pubddl_table");
+							 ", pubddl_table, pubddl_index");
+
 	appendPQExpBufferStr(&buf,
 						 ",  pubinsert, pubupdate, pubdelete");
 	if (has_pubtruncate)
@@ -6400,7 +6405,7 @@ describePublications(const char *pattern)
 		if (has_pubviaroot)
 			ncols++;
 		if (has_pubddl)
-			ncols++;
+			ncols += 2;
 
 		initPQExpBuffer(&title);
 		printfPQExpBuffer(&title, _("Publication %s"), pubname);
@@ -6409,7 +6414,10 @@ describePublications(const char *pattern)
 		printTableAddHeader(&cont, gettext_noop("Owner"), true, align);
 		printTableAddHeader(&cont, gettext_noop("All tables"), true, align);
 		if (has_pubddl)
+		{
 			printTableAddHeader(&cont, gettext_noop("Table DDLs"), true, align);
+			printTableAddHeader(&cont, gettext_noop("Index DDLs"), true, align);
+		}
 		printTableAddHeader(&cont, gettext_noop("Inserts"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Updates"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Deletes"), true, align);
@@ -6428,7 +6436,10 @@ describePublications(const char *pattern)
 		if (has_pubviaroot)
 			printTableAddCell(&cont, PQgetvalue(res, i, 8), false, false);
 		if (has_pubddl)
+		{
 			printTableAddCell(&cont, PQgetvalue(res, i, 9), false, false);
+			printTableAddCell(&cont, PQgetvalue(res, i, 10), false, false);
+		}
 
 		if (!puballtables)
 		{

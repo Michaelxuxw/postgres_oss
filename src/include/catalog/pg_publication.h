@@ -66,6 +66,9 @@ CATALOG(pg_publication,6104,PublicationRelationId)
 
 	/* true if table ddls are published */
 	bool		pubddl_table;
+
+	/* true if index ddls are published */
+	bool		pubddl_index;
 } FormData_pg_publication;
 
 /* ----------------
@@ -85,6 +88,7 @@ typedef struct PublicationActions
 	bool		pubdelete;
 	bool		pubtruncate;
 	bool		pubddl_table;
+	bool		pubddl_index;
 } PublicationActions;
 
 typedef struct PublicationDesc

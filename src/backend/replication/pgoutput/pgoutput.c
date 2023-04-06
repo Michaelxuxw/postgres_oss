@@ -219,10 +219,20 @@ typedef struct PGOutputTxnData
 /* Map used to remember which relation schemas we sent. */
 static HTAB *RelationSyncCache = NULL;
 
+/* Struct to cache the published DDL. */
+typedef struct DDLSyncCache
+{
+	bool		valid;
+	bool		pubindex;
+} DDLSyncCache;
+
+static DDLSyncCache *ddlcache = NULL;
+
 static void init_rel_sync_cache(MemoryContext cachectx);
 static void cleanup_rel_sync_cache(TransactionId xid, bool is_commit);
 static RelationSyncEntry *get_rel_sync_entry(PGOutputData *data,
 											 Relation relation);
+static void build_ddl_sync_cache(PGOutputData *data);
 static void rel_sync_cache_relation_cb(Datum arg, Oid relid);
 static void rel_sync_cache_publication_cb(Datum arg, int cacheid,
 										  uint32 hashvalue);
@@ -1727,6 +1737,28 @@ is_object_published(LogicalDecodingContext *ctx, Oid objid)
 				return false;
 
 			break;
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			build_ddl_sync_cache(data);
+
+			if (!ddlcache->pubindex)
+				return false;
+
+			/* Get the table OID that the index is for. */
+			relation = RelationIdGetRelation(objid);
+			objid = relation->rd_index->indrelid;
+			RelationClose(relation);
+
+			/* Filter the index DDLs if the index's table was not published. */
+			relation = RelationIdGetRelation(objid);
+			relentry = get_rel_sync_entry(data, relation);
+			RelationClose(relation);
+
+			if (!relentry->pubactions.pubddl_table ||
+				relentry->publish_as_relid != objid)
+				return false;
+
+			break;
 		default:
 			/* unsupported objects */
 			return false;
@@ -1751,12 +1783,14 @@ pgoutput_ddl(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 * we cannot get the required information from the catalog, so we skip the
 	 * check for them.
 	 */
-	if (cmdtype != DCT_TableDropEnd && !is_object_published(ctx, relid))
+	if (cmdtype != DCT_TableDropEnd && cmdtype != DCT_ObjectDropEnd &&
+		!is_object_published(ctx, relid))
 		return;
 
 	switch (cmdtype)
 	{
 		case DCT_TableDropStart:
+		case DCT_ObjectDropStart:
 			{
 				MemoryContext	old;
 
@@ -1780,6 +1814,7 @@ pgoutput_ddl(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			return;
 
 		case DCT_TableDropEnd:
+		case DCT_ObjectDropEnd:
 			if (!list_member_oid(txndata->deleted_relids, relid))
 				return;
 
@@ -1872,6 +1907,9 @@ publication_invalidation_cb(Datum arg, int cacheid, uint32 hashvalue)
 	 * is checked it will be updated with the new publication settings.
 	 */
 	rel_sync_cache_publication_cb(arg, cacheid, hashvalue);
+
+	if (ddlcache != NULL)
+		ddlcache->valid = false;
 }
 
 /*
@@ -2139,7 +2177,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->streamed_txns = NIL;
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
 			entry->pubactions.pubdelete = entry->pubactions.pubtruncate =
-			entry->pubactions.pubddl_table = false;
+			entry->pubactions.pubddl_table = entry->pubactions.pubddl_index = false;
 		entry->new_slot = NULL;
 		entry->old_slot = NULL;
 		memset(entry->exprstate, 0, sizeof(entry->exprstate));
@@ -2186,6 +2224,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->pubactions.pubdelete = false;
 		entry->pubactions.pubtruncate = false;
 		entry->pubactions.pubddl_table = false;
+		entry->pubactions.pubddl_index = false;
 
 		/*
 		 * Tuple slots cleanups. (Will be rebuilt later if needed).
@@ -2300,6 +2339,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
 				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
 				entry->pubactions.pubddl_table |= pub->pubactions.pubddl_table;
+				entry->pubactions.pubddl_index |= pub->pubactions.pubddl_index;
 
 				/*
 				 * We want to publish the changes as the top-most ancestor
@@ -2362,6 +2402,42 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 	}
 
 	return entry;
+}
+
+/*
+ * This looks up all publications and build the cache about which DDLs to
+ * publish.
+ */
+static void
+build_ddl_sync_cache(PGOutputData *data)
+{
+	ListCell	 *lc;
+	MemoryContext oldctx;
+
+	if (ddlcache == NULL)
+	{
+		oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+		ddlcache = (DDLSyncCache *) palloc0(sizeof(DDLSyncCache));
+		MemoryContextSwitchTo(oldctx);
+	}
+
+	if (ddlcache->valid)
+		return;
+
+	ddlcache->pubindex = false;
+
+	reload_publications(data);
+
+	foreach(lc, data->publications)
+	{
+		Publication *pub = lfirst(lc);
+
+		ddlcache->pubindex |= pub->pubactions.pubddl_index;
+	}
+
+	ddlcache->valid = true;
+
+	return;
 }
 
 /*

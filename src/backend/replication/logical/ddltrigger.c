@@ -116,8 +116,17 @@ publication_deparse_ddl_command_start(PG_FUNCTION_ARGS)
 		 * new table.
 		 */
 		if (relpersist == RELPERSISTENCE_PERMANENT)
-			LogLogicalDDLMessage("deparse", address.objectId, DCT_TableDropStart,
+		{
+			DeparsedCommandType cmdtype;
+
+			if (stmt->removeType == OBJECT_TABLE)
+				cmdtype = DCT_TableDropStart;
+			else
+				cmdtype = DCT_ObjectDropStart;
+
+			LogLogicalDDLMessage("deparse", address.objectId, cmdtype,
 								 command, strlen(command) + 1);
+		}
 
 		if (relation)
 			table_close(relation, NoLock);
@@ -276,6 +285,8 @@ publication_deparse_ddl_command_end(PG_FUNCTION_ARGS)
 
 		if (strcmp(obj->objecttype, "table") == 0)
 			cmdtype = DCT_TableDropEnd;
+		else if (strcmp(obj->objecttype, "index") == 0)
+			cmdtype = DCT_ObjectDropEnd;
 		else
 			continue;
 
