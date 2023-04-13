@@ -128,7 +128,8 @@ sub create_deparse_testing_resources_on_pub_node {
 						              'CREATE FOREIGN TABLE', 'CREATE TABLE',
 						              'CREATE TABLE AS', 'DROP FOREIGN TABLE',
 						              'DROP TABLE', 'ALTER SEQUENCE',
-						              'CREATE SEQUENCE', 'DROP SEQUENCE')
+						              'CREATE SEQUENCE', 'DROP SEQUENCE',
+                                      'ALTER INDEX', 'CREATE INDEX', 'DROP INDEX')
             loop
                 insert into deparsed_ddls(tag, object_identity, ddl) values (r.command_tag, r.object_identity, pg_catalog.ddl_deparse_to_json(r.command));
             end loop;

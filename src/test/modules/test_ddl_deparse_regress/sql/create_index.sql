@@ -1,5 +1,6 @@
--- Currently, ddl deparse only supports the TABLE command. Therefore, this
--- test file is only prepared for testing the TABLE command.
+---
+--- CREATE_INDEX
+---
 
 -- Command prepared for alter_table.sql.
 -- For "ADD table_constraint_using_index"
