@@ -18,12 +18,20 @@
 typedef struct
 {
 	bool		verbose_mode;
+	/*
+	 * include_owner indicates if the owner/role of the command should be
+	 * included in the deparsed Json output. It is set to false for any commands
+	 * that don't CREATE database objects (ALTER commands for example), this is
+	 * to avoid encoding and sending the owner to downstream for replay as it is
+	 * unnecessary for such commands.
+	 */
+	bool		include_owner;
 	/* provolatile flag of the function contained in the command */
 	char		func_volatile;
 } ddl_deparse_context;
 
 extern char *deparse_utility_command(CollectedCommand *cmd, ddl_deparse_context *context);
-extern char *deparse_ddl_json_to_string(char *jsonb);
+extern char *deparse_ddl_json_to_string(char *jsonb, char** owner);
 extern char *deparse_drop_command(const char *objidentity, const char *objecttype,
 								  Node *parsetree);
 

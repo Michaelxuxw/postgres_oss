@@ -882,6 +882,7 @@ EventTriggerTableInitWriteStart(Node *parsetree)
 
 	command->type = (stmt->objtype == OBJECT_TABLE) ? SCT_CreateTableAs : SCT_Simple;
 	command->in_extension = creating_extension;
+	command->role = GetUserNameFromId(GetUserId(), false);
 	command->d.ctas.address = InvalidObjectAddress;
 	command->d.ctas.real_create = NULL;
 	command->parsetree = copyObject(parsetree);
@@ -1627,6 +1628,7 @@ EventTriggerCollectSimpleCommand(ObjectAddress address,
 
 	command->type = SCT_Simple;
 	command->in_extension = creating_extension;
+	command->role = GetUserNameFromId(GetUserId(), false);
 
 	command->d.simple.address = address;
 	command->d.simple.secondaryObject = secondaryObject;
@@ -1663,6 +1665,7 @@ EventTriggerAlterTableStart(Node *parsetree)
 
 	command->type = SCT_AlterTable;
 	command->in_extension = creating_extension;
+	command->role = GetUserNameFromId(GetUserId(), false);
 
 	command->d.alterTable.classId = RelationRelationId;
 	command->d.alterTable.objectId = InvalidOid;
@@ -1946,6 +1949,7 @@ EventTriggerCollectGrant(InternalGrant *istmt)
 	command = palloc(sizeof(CollectedCommand));
 	command->type = SCT_Grant;
 	command->in_extension = creating_extension;
+	command->role = GetUserNameFromId(GetUserId(), false);
 	command->d.grant.istmt = icopy;
 	command->parsetree = NULL;
 
@@ -1977,6 +1981,7 @@ EventTriggerCollectAlterOpFam(AlterOpFamilyStmt *stmt, Oid opfamoid,
 	command = palloc(sizeof(CollectedCommand));
 	command->type = SCT_AlterOpFamily;
 	command->in_extension = creating_extension;
+	command->role = GetUserNameFromId(GetUserId(), false);
 	ObjectAddressSet(command->d.opfam.address,
 					 OperatorFamilyRelationId, opfamoid);
 	command->d.opfam.operators = operators;

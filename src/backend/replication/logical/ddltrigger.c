@@ -169,6 +169,7 @@ publication_deparse_table_rewrite(PG_FUNCTION_ARGS)
 		ddl_deparse_context context;
 
 		context.verbose_mode = false;
+		context.include_owner = true;
 		context.func_volatile = PROVOLATILE_IMMUTABLE;
 
 		/* Deparse the DDL command and WAL log it to allow decoding of the same. */
@@ -256,6 +257,7 @@ publication_deparse_ddl_command_end(PG_FUNCTION_ARGS)
 			 */
 			ddl_deparse_context context;
 			context.verbose_mode = false;
+			context.include_owner = true;
 			context.func_volatile = PROVOLATILE_IMMUTABLE;
 
 			json_string = deparse_utility_command(cmd, &context);
@@ -336,6 +338,7 @@ publication_deparse_table_init_write(PG_FUNCTION_ARGS)
 		return PointerGetDatum(NULL);
 
 	context.verbose_mode = false;
+	context.include_owner = true;
 	context.func_volatile = PROVOLATILE_IMMUTABLE;
 
 	/* Deparse the DDL command and WAL log it to allow decoding of the same. */
