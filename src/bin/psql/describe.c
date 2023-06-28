@@ -6241,7 +6241,7 @@ listPublications(const char *pattern)
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
-	static const bool translate_columns[] = {false, false, false, false, false, false, false, false};
+	static const bool translate_columns[] = {false, false, false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6268,6 +6268,10 @@ listPublications(const char *pattern)
 					  gettext_noop("Inserts"),
 					  gettext_noop("Updates"),
 					  gettext_noop("Deletes"));
+	if (pset.sversion >= 160000)
+		appendPQExpBuffer(&buf,
+						  ",\n  pubddl_table AS \"%s\"",
+						  gettext_noop("Table DDLs"));
 	if (pset.sversion >= 110000)
 		appendPQExpBuffer(&buf,
 						  ",\n  pubtruncate AS \"%s\"",
@@ -6366,6 +6370,7 @@ describePublications(const char *pattern)
 	PGresult   *res;
 	bool		has_pubtruncate;
 	bool		has_pubviaroot;
+	bool		has_pubddl;
 
 	PQExpBufferData title;
 	printTableContent cont;
@@ -6380,6 +6385,7 @@ describePublications(const char *pattern)
 		return true;
 	}
 
+	has_pubddl =  (pset.sversion >= 160000);
 	has_pubtruncate = (pset.sversion >= 110000);
 	has_pubviaroot = (pset.sversion >= 130000);
 
@@ -6389,6 +6395,9 @@ describePublications(const char *pattern)
 					  "SELECT oid, pubname,\n"
 					  "  pg_catalog.pg_get_userbyid(pubowner) AS owner,\n"
 					  "  puballtables, pubinsert, pubupdate, pubdelete");
+	if (has_pubddl)
+		appendPQExpBufferStr(&buf,
+							 ", pubddl_table");
 	if (has_pubtruncate)
 		appendPQExpBufferStr(&buf,
 							 ", pubtruncate");
@@ -6442,6 +6451,8 @@ describePublications(const char *pattern)
 		bool		puballtables = strcmp(PQgetvalue(res, i, 3), "t") == 0;
 		printTableOpt myopt = pset.popt.topt;
 
+		if (has_pubddl)
+			ncols++;
 		if (has_pubtruncate)
 			ncols++;
 		if (has_pubviaroot)
@@ -6456,6 +6467,8 @@ describePublications(const char *pattern)
 		printTableAddHeader(&cont, gettext_noop("Inserts"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Updates"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Deletes"), true, align);
+		if (has_pubddl)
+			printTableAddHeader(&cont, gettext_noop("Table DDLs"), true, align);
 		if (has_pubtruncate)
 			printTableAddHeader(&cont, gettext_noop("Truncates"), true, align);
 		if (has_pubviaroot)
@@ -6466,10 +6479,12 @@ describePublications(const char *pattern)
 		printTableAddCell(&cont, PQgetvalue(res, i, 4), false, false);
 		printTableAddCell(&cont, PQgetvalue(res, i, 5), false, false);
 		printTableAddCell(&cont, PQgetvalue(res, i, 6), false, false);
-		if (has_pubtruncate)
+		if (has_pubddl)
 			printTableAddCell(&cont, PQgetvalue(res, i, 7), false, false);
-		if (has_pubviaroot)
+		if (has_pubtruncate)
 			printTableAddCell(&cont, PQgetvalue(res, i, 8), false, false);
+		if (has_pubviaroot)
+			printTableAddCell(&cont, PQgetvalue(res, i, 9), false, false);
 
 		if (!puballtables)
 		{

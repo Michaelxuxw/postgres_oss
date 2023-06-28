@@ -12624,7 +12624,8 @@ get_range_partbound_string(List *bound_datums)
  * passed attribute has a default value.
  */
 char *
-relation_get_column_default(Relation rel, AttrNumber attno, List *dpcontext)
+relation_get_column_default(Relation rel, AttrNumber attno, List *dpcontext,
+							 Node **expr)
 {
 	Node	   *defval;
 	char	   *defstr;
@@ -12633,6 +12634,10 @@ relation_get_column_default(Relation rel, AttrNumber attno, List *dpcontext)
 	Assert(defval != NULL);
 
 	defstr = deparse_expression(defval, dpcontext, false, false);
+
+	/* Collect the expression for later replication safety checks */
+	if (expr)
+		*expr = defval;
 
 	return defstr;
 }
