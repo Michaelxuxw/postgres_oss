@@ -4695,7 +4695,7 @@ getSubscriptions(Archive *fout)
 	else
 		appendPQExpBuffer(query,
 						  " '%s' AS suborigin,\n"
-						  " 't' AS subpasswordrequired,\n",
+						  " 't' AS subpasswordrequired,\n"
 						  " false AS submatchddlowner\n",
 						  LOGICALREP_ORIGIN_ANY);
 
@@ -4760,7 +4760,7 @@ getSubscriptions(Archive *fout)
 		subinfo[i].subpasswordrequired =
 			pg_strdup(PQgetvalue(res, i, i_subpasswordrequired));
 		subinfo[i].submatchddlowner =
-+			pg_strdup(PQgetvalue(res, i, i_submatchddlowner));
+			pg_strdup(PQgetvalue(res, i, i_submatchddlowner));
 
 		/* Decide whether we want to dump it */
 		selectDumpableObject(&(subinfo[i].dobj), fout);

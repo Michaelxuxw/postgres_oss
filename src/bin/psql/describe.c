@@ -6579,11 +6579,11 @@ describeSubscriptions(const char *pattern, bool verbose)
 		if (pset.sversion >= 160000)
 			appendPQExpBuffer(&buf,
 							  ", suborigin AS \"%s\"\n"
-							  ", subrunasowner AS \"%s\"\n",
+							  ", subrunasowner AS \"%s\"\n"
 							  ", submatchddlowner AS \"%s\"\n",
 							  gettext_noop("Origin"),
 							  gettext_noop("Run as Owner?"),
-							  gettext_noop("Match DDL owner")););
+							  gettext_noop("Match DDL owner"));
 
 		appendPQExpBuffer(&buf,
 						  ",  subsynccommit AS \"%s\"\n"
